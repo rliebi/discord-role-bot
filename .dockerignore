@@ -1,0 +1,55 @@
+# Exclude VCS and CI
+.git
+.gitignore
+.github/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.cache/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+env/
+
+# OS/Editor/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local data and logs
+/data/
+data/
+.data/
+logs/
+/tmp/
+
+# Docs and examples (not needed at runtime)
+docs/
+
+# Dev scripts and compose files (not needed in runtime image)
+scripts/
+docker-compose.yml
+stack.yml
+
+# Everything else is allowed; Dockerfile copies only what it needs
+requirements.txt
+src/
+Dockerfile
+LICENSE
+README.md

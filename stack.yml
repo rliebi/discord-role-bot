@@ -1,0 +1,34 @@
+version: "3.8"
+services:
+  discord-role-bot:
+    image: ghcr.io/<owner>/discord-role-bot:latest
+    # build: .
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ALLOWED_GUILDS=${ALLOWED_GUILDS:-}
+      - DATA_DIR=/data
+    volumes:
+      - rolebot-data:/data
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        order: start-first
+      restart_policy:
+        condition: any
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rolebot
+
+volumes:
+  rolebot-data:
+
+networks:
+  rolebot:
+    driver: overlay
