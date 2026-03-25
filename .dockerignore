@@ -47,9 +47,5 @@ scripts/
 docker-compose.yml
 stack.yml
 
-# Everything else is allowed; Dockerfile copies only what it needs
-requirements.txt
-src/
-Dockerfile
-LICENSE
-README.md
+# Allow required build inputs (requirements.txt, src/) to be included in build context
+# Note: Do not list them here, as entries in .dockerignore exclude paths.
