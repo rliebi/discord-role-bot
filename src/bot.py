@@ -319,6 +319,12 @@ async def admin_resync(interaction: Interaction):
     if not admin_only(interaction):
         await interaction.response.send_message("Only the admin can resync commands.", ephemeral=True)
         return
+    # Defer to avoid interaction timeout during potentially long sync
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        # Ignore if already deferred or responded for some reason
+        pass
     try:
         if bot.settings.allowed_guilds:
             # sync only to configured guilds
@@ -329,9 +335,9 @@ async def admin_resync(interaction: Interaction):
                     logger.warning("Resync failed for guild %s: %s", gid, e)
         else:
             await bot.tree.sync()
-        await interaction.response.send_message("Commands resynced.", ephemeral=True)
+        await interaction.followup.send("Commands resynced.")
     except Exception as e:
-        await interaction.response.send_message(f"Resync failed: {e}", ephemeral=True)
+        await interaction.followup.send(f"Resync failed: {e}")
 
 
 @roles_allow_group.command(name="add", description="Allow a role to be assigned via the bot")
