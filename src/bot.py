@@ -207,7 +207,7 @@ class RoleBot(commands.Bot):
         # Register command groups
         self.tree.add_command(setup_group)
         self.tree.add_command(admin_group)
-        self.tree.add_command(roles_allow_group)
+        self.tree.add_command(roles_group)
         # Sync commands on startup (guild-specific if restricted)
         if self.settings.allowed_guilds:
             for gid in self.settings.allowed_guilds:
@@ -380,7 +380,7 @@ def moderator_only(interaction: Interaction) -> bool:
 # Command groups
 setup_group = app_commands.Group(name="setup", description="Server setup commands")
 admin_group = app_commands.Group(name="admin", description="Admin commands")
-roles_allow_group = app_commands.Group(name="roles_allow", description="Manage allowed roles")
+roles_group = app_commands.Group(name="roles", description="Manage allowed roles and groups")
 
 
 @setup_group.command(name="set_moderator_role", description="Set a Discord role that grants moderator permissions for this bot.")
@@ -504,13 +504,13 @@ async def admin_simulate_rejoin(interaction: Interaction, member: discord.Member
         await bot.post_assignment_panel(member)
         await interaction.response.send_message(f"Simulated rejoin for {member.mention}. Panel posted in the assignment channel.", ephemeral=True)
     except Exception as e:
-        logger.exception("admin simulate_rejoin failed: %s", e)
+        logger.exception("simulate_rejoin failed: %s", e)
         await interaction.response.send_message(f"Failed to simulate rejoin: {e}", ephemeral=True)
 
 
-@roles_allow_group.command(name="add", description="Allow a role to be assigned via the bot")
+@roles_group.command(name="add", description="Allow a role to be assigned via the bot")
 @app_commands.describe(role="Role to allow")
-async def roles_allow_add(interaction: Interaction, role: discord.Role):
+async def roles_add(interaction: Interaction, role: discord.Role):
     await ensure_admin_if_empty(interaction)
     if not admin_only(interaction):
         await interaction.response.send_message("Only the admin can manage allowed roles.", ephemeral=True)
@@ -525,9 +525,9 @@ async def roles_allow_add(interaction: Interaction, role: discord.Role):
     await interaction.response.send_message(f"Allowed role: {role.name}", ephemeral=True)
 
 
-@roles_allow_group.command(name="remove", description="Remove a role from allowed list")
+@roles_group.command(name="remove", description="Remove a role from allowed list")
 @app_commands.describe(role="Role to disallow")
-async def roles_allow_remove(interaction: Interaction, role: discord.Role):
+async def roles_remove(interaction: Interaction, role: discord.Role):
     await ensure_admin_if_empty(interaction)
     if not admin_only(interaction):
         await interaction.response.send_message("Only the admin can manage allowed roles.", ephemeral=True)
@@ -539,8 +539,8 @@ async def roles_allow_remove(interaction: Interaction, role: discord.Role):
     await interaction.response.send_message(f"Disallowed role: {role.name}", ephemeral=True)
 
 
-@roles_allow_group.command(name="list", description="List allowed roles")
-async def roles_allow_list(interaction: Interaction):
+@roles_group.command(name="list", description="List allowed roles")
+async def roles_list(interaction: Interaction):
     await ensure_admin_if_empty(interaction)
     if not moderator_only(interaction):
         await interaction.response.send_message("Not permitted.", ephemeral=True)
@@ -567,7 +567,7 @@ async def roles_allow_list(interaction: Interaction):
     await interaction.response.send_message("Allowed roles:\n" + ("\n".join(roles) if roles else "none"), ephemeral=True)
 
 
-@roles_allow_group.command(name="set_parent", description="Set a parent role requirement for an allowed role")
+@roles_group.command(name="set_parent", description="Set a parent role requirement for an allowed role")
 @app_commands.describe(role="The role that will require a parent", parent="The required parent role")
 async def roles_set_parent(interaction: Interaction, role: discord.Role, parent: discord.Role):
     await ensure_admin_if_empty(interaction)
@@ -584,7 +584,7 @@ async def roles_set_parent(interaction: Interaction, role: discord.Role, parent:
     await interaction.response.send_message(f"Role {role.name} now requires {parent.name}.", ephemeral=True)
 
 
-@roles_allow_group.command(name="remove_parent", description="Remove the parent role requirement from a role")
+@roles_group.command(name="remove_parent", description="Remove the parent role requirement from a role")
 @app_commands.describe(role="The role to remove the requirement from")
 async def roles_remove_parent(interaction: Interaction, role: discord.Role):
     await ensure_admin_if_empty(interaction)
@@ -600,41 +600,64 @@ async def roles_remove_parent(interaction: Interaction, role: discord.Role):
         await interaction.response.send_message(f"Role {role.name} had no requirement.", ephemeral=True)
 
 
-@roles_allow_group.command(name="xor_add", description="Add a role to an XOR group (only one role from the group can be assigned)")
-@app_commands.describe(group_name="The name of the XOR bundle", role="The role to add to this bundle")
-async def roles_xor_add(interaction: Interaction, group_name: str, role: discord.Role):
+@roles_group.command(name="xor_add", description="Add roles to an XOR group (only one role from the group can be assigned)")
+@app_commands.describe(
+    group_name="The name of the XOR bundle",
+    role1="The first role to add to this bundle",
+    role2="Another role to add to this bundle",
+    role3="Another role to add to this bundle",
+    role4="Another role to add to this bundle",
+    role5="Another role to add to this bundle"
+)
+async def roles_xor_add(
+    interaction: Interaction,
+    group_name: str,
+    role1: discord.Role,
+    role2: Optional[discord.Role] = None,
+    role3: Optional[discord.Role] = None,
+    role4: Optional[discord.Role] = None,
+    role5: Optional[discord.Role] = None
+):
     await ensure_admin_if_empty(interaction)
     if not admin_only(interaction):
         await interaction.response.send_message("Only the admin can manage XOR groups.", ephemeral=True)
         return
     cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
-    if role.id not in cfg.allowed_role_ids:
-        await interaction.response.send_message(f"Role {role.name} is not in the allowed list. Add it first.", ephemeral=True)
-        return
     
-    # Ensure role is not in another XOR group (or same group already)
-    # Removing it from any existing group first to simplify
-    for gname, rids in cfg.xor_groups.items():
-        if role.id in rids:
-            rids.remove(role.id)
+    input_roles = [r for r in [role1, role2, role3, role4, role5] if r is not None]
+    
+    # Check if all roles are allowed first
+    not_allowed = [r.name for r in input_roles if r.id not in cfg.allowed_role_ids]
+    if not_allowed:
+        await interaction.response.send_message(f"Roles not in allowed list: {', '.join(not_allowed)}. Add them with `/roles add` first.", ephemeral=True)
+        return
     
     if group_name not in cfg.xor_groups:
         cfg.xor_groups[group_name] = []
-    
-    if role.id not in cfg.xor_groups[group_name]:
-        cfg.xor_groups[group_name].append(role.id)
         if group_name not in cfg.xor_group_order:
             cfg.xor_group_order.append(group_name)
+
+    added_names = []
+    for role in input_roles:
+        # Ensure role is not in another XOR group (or same group already)
+        # Removing it from any existing group first to simplify
+        for gname, rids in cfg.xor_groups.items():
+            if role.id in rids:
+                rids.remove(role.id)
+        
+        if role.id not in cfg.xor_groups[group_name]:
+            cfg.xor_groups[group_name].append(role.id)
+            added_names.append(role.name)
     
     # Cleanup empty groups
     cfg.xor_groups = {gn: rids for gn, rids in cfg.xor_groups.items() if rids}
     cfg.xor_group_order = [gn for gn in cfg.xor_group_order if gn in cfg.xor_groups]
     
     bot.storage.save_guild(cfg)
-    await interaction.response.send_message(f"Role {role.name} added to XOR group '{group_name}'.", ephemeral=True)
+    await interaction.response.send_message(f"Added roles to XOR group '{group_name}': {', '.join(added_names)}", ephemeral=True)
 
 
-@roles_allow_group.command(name="xor_remove", description="Remove a role from its XOR group")
+@roles_group.command(name="xor_remove", description="Remove a role from its XOR group")
 @app_commands.describe(role="The role to remove from any XOR bundle")
 async def roles_xor_remove(interaction: Interaction, role: discord.Role):
     await ensure_admin_if_empty(interaction)
@@ -661,7 +684,7 @@ async def roles_xor_remove(interaction: Interaction, role: discord.Role):
         await interaction.response.send_message(f"Role {role.name} was not in any XOR group.", ephemeral=True)
 
 
-@roles_allow_group.command(name="xor_rename", description="Rename an XOR group")
+@roles_group.command(name="xor_rename", description="Rename an XOR group")
 @app_commands.describe(old_name="The current name of the XOR bundle", new_name="The new name for the XOR bundle")
 async def roles_xor_rename(interaction: Interaction, old_name: str, new_name: str):
     await ensure_admin_if_empty(interaction)
@@ -690,7 +713,7 @@ async def roles_xor_rename(interaction: Interaction, old_name: str, new_name: st
     await interaction.response.send_message(f"XOR group '{old_name}' renamed to '{new_name}'.", ephemeral=True)
 
 
-@roles_allow_group.command(name="xor_order", description="Set the order of XOR groups (comma-separated names)")
+@roles_group.command(name="xor_order", description="Set the order of XOR groups (comma-separated names)")
 @app_commands.describe(order="Comma-separated list of XOR group names")
 async def roles_xor_order(interaction: Interaction, order: str):
     await ensure_admin_if_empty(interaction)

@@ -81,9 +81,15 @@ Admin commands
 - /admin resync
 
 Allowed roles management (admin only)
-- /roles_allow add role:<Role>
-- /roles_allow remove role:<Role>
-- /roles_allow list (visible to moderators/admin)
+- /roles add role:<Role>
+- /roles remove role:<Role>
+- /roles list (visible to moderators/admin)
+- /roles set_parent role:<Role> parent:<Role>
+- /roles remove_parent role:<Role>
+- /roles xor_add group_name:<String> role1:<Role> [role2:<Role> ...]
+- /roles xor_remove role:<Role>
+- /roles xor_rename old_name:<String> new_name:<String>
+- /roles xor_order order:<String>
 
 Moderator commands
 - /assign member:<Member> role:<Allowed Role>

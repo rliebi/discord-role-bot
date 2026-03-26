@@ -25,13 +25,22 @@ Admin
 - /admin resync
   - Forces a re-sync of slash commands. Useful after first install or permission changes.
 
-Allowed roles (admin only)
-- /roles_allow add role:<Role>
+Allowed roles & XOR groups (admin only)
+- /roles add role:<Role>
   - Adds a role to the whitelist that moderators can assign/remove.
-- /roles_allow remove role:<Role>
+- /roles remove role:<Role>
   - Removes a role from the whitelist.
-- /roles_allow list
+- /roles list
   - Shows the currently allowed roles (visible to moderators and admin).
+- /roles set_parent role:<Role> parent:<Role>
+  - Set a requirement for a role to be assignable.
+- /roles xor_add group_name:<String> role1:<Role> [role2:<Role> ...]
+  - Create or add to a mutually exclusive group of roles.
+- /roles xor_remove role:<Role>
+  - Remove a role from its XOR group.
+- /roles xor_rename old_name:<String> new_name:<String>
+- /roles xor_order order:<String>
+  - Set the display order of XOR groups.
 
 Moderator actions
 - /assign member:<Member> role:<Allowed Role>
@@ -56,7 +65,7 @@ Admin workflows
 1) First-time setup
    - Run any setup/admin command; you become the admin.
    - /setup set_moderator_role or use /admin add_moderator for individuals.
-   - Add allowed roles with /roles_allow add.
+   - Add allowed roles with /roles add.
    - Optionally set a dedicated channel with /setup set_assignment_channel.
 2) Day-to-day
    - Use the join panel to toggle roles or run /assign and /remove.
