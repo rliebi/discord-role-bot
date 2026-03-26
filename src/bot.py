@@ -67,7 +67,6 @@ class RoleBot(commands.Bot):
         super().__init__(command_prefix=commands.when_mentioned_or("/"), intents=INTENTS)
         self.settings = settings
         self.storage = Storage(settings.data_path)
-        self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self) -> None:
         # Register command groups
