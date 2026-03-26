@@ -42,6 +42,7 @@ Moderator actions
   - Simulates that the specified member just joined. Posts the same control panel in the assignment channel so you can test role toggles without the user actually leaving and rejoining. Only available to moderators/admin.
 - Control panel buttons
   - On member join, a pinned message with buttons lets you toggle roles on that specific member.
+  - Each button shows a checkmark if the member currently has that role (✅) or an empty box if not (☐), and the panel updates immediately after changes.
 
 Ephemeral vs public responses
 - Most command responses are ephemeral (visible only to the user who ran the command) especially when they involve permissions or member info.

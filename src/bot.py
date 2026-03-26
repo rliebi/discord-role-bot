@@ -26,14 +26,18 @@ class RoleToggleView(discord.ui.View):
     def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.member = member
+        # Prefix button labels with checkmarks to reflect current assignment state
+        member_role_ids = {r.id for r in member.roles}
         for role in allowed_roles[:25]:  # Discord max buttons per view
             style = discord.ButtonStyle.secondary
-            self.add_item(RoleToggleButton(role=role, style=style))
+            checked = "✅" if role.id in member_role_ids else "☐"
+            label = f"{checked} {role.name}"
+            self.add_item(RoleToggleButton(role=role, label=label, style=style))
 
 
 class RoleToggleButton(discord.ui.Button):
-    def __init__(self, role: discord.Role, style: discord.ButtonStyle):
-        super().__init__(label=role.name, style=style, custom_id=f"toggle_role:{role.id}")
+    def __init__(self, role: discord.Role, style: discord.ButtonStyle, label: Optional[str] = None):
+        super().__init__(label=label or role.name, style=style, custom_id=f"toggle_role:{role.id}")
         self.role = role
 
     async def callback(self, interaction: Interaction):
@@ -50,12 +54,32 @@ class RoleToggleButton(discord.ui.Button):
             await interaction.response.send_message("Could not resolve target member.", ephemeral=True)
             return
         try:
+            action = None
             if self.role in member.roles:
                 await member.remove_roles(self.role, reason=f"Toggled by {interaction.user} via bot")
-                await interaction.response.send_message(f"Removed {self.role.name} from {member.display_name}.", ephemeral=True)
+                action = "removed"
             else:
                 await member.add_roles(self.role, reason=f"Toggled by {interaction.user} via bot")
-                await interaction.response.send_message(f"Assigned {self.role.name} to {member.display_name}.", ephemeral=True)
+                action = "assigned"
+            # Ack ephemerally
+            await interaction.response.send_message(
+                f"{action.capitalize()} {self.role.name} {'from' if action=='removed' else 'to'} {member.display_name}.",
+                ephemeral=True,
+            )
+            # Refresh the control panel to reflect new state (checkmarks)
+            try:
+                bot: RoleBot = interaction.client  # type: ignore
+                cfg = bot.get_guild_cfg(member.guild.id)
+                allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
+                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles)
+                new_content = bot.build_panel_content(member, allowed_roles)
+                if interaction.message:
+                    try:
+                        await interaction.message.edit(content=new_content, view=new_view, suppress=True)
+                    except TypeError:
+                        await interaction.message.edit(content=new_content, view=new_view)
+            except Exception:
+                pass
         except discord.Forbidden:
             await interaction.response.send_message("I don't have permission to manage that role.", ephemeral=True)
         except discord.HTTPException as e:
@@ -67,6 +91,42 @@ class RoleBot(commands.Bot):
         super().__init__(command_prefix=commands.when_mentioned_or("/"), intents=INTENTS)
         self.settings = settings
         self.storage = Storage(settings.data_path)
+
+    # Helpers to render panel content with checkmarks
+    @staticmethod
+    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role]) -> str:
+        member_role_ids = {r.id for r in member.roles}
+        lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below.", "", "Current allowed roles:"]
+        for r in allowed_roles:
+            checked = "✅" if r.id in member_role_ids else "☐"
+            lines.append(f"- {checked} {r.name}")
+        return "\n".join(lines)
+
+    async def refresh_member_panel(self, member: discord.Member) -> None:
+        cfg = self.get_guild_cfg(member.guild.id)
+        if not cfg.assignment_channel_id:
+            return
+        channel = member.guild.get_channel(cfg.assignment_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        # find the most recent panel for this member
+        try:
+            async for m in channel.history(limit=50):
+                if m.author.id == self.user.id if self.user else False:  # type: ignore
+                    # check mention and components
+                    if member in m.mentions and m.components:
+                        allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
+                        view = RoleToggleView(member=member, allowed_roles=allowed_roles)
+                        content = self.build_panel_content(member, allowed_roles)
+                        try:
+                            await m.edit(content=content, view=view, suppress=True)
+                        except TypeError:
+                            # suppress kw name varies across versions; fallback
+                            await m.edit(content=content, view=view)
+                        break
+        except Exception:
+            # ignore refresh errors
+            pass
 
     async def setup_hook(self) -> None:
         # Register command groups
@@ -144,8 +204,12 @@ class RoleBot(commands.Bot):
             await channel.send(content)
             return
         view = RoleToggleView(member=member, allowed_roles=allowed_roles)
-        content = f"New member joined: {member.mention}\nToggle roles for this member using the buttons below."
-        msg = await channel.send(content, view=view, silent=True, suppress_embeds=True)
+        content = self.build_panel_content(member, allowed_roles)
+        try:
+            msg = await channel.send(content, view=view, silent=True, suppress_embeds=True)
+        except TypeError:
+            # Older discord.py may not support suppress_embeds kw
+            msg = await channel.send(content, view=view, silent=True)
         # Pin message and watch for deletion by recreating if needed isn't directly possible without background task.
         try:
             await msg.pin(reason="Keep role control visible")
@@ -430,6 +494,10 @@ async def assign(interaction: Interaction, member: discord.Member, role: discord
     try:
         await member.add_roles(role, reason=f"Assigned by {interaction.user} via bot")
         await interaction.response.send_message(f"Assigned {role.name} to {member.display_name}.", ephemeral=True)
+        try:
+            await bot.refresh_member_panel(member)
+        except Exception:
+            pass
     except discord.Forbidden:
         await interaction.response.send_message("I don't have permission to manage that role.", ephemeral=True)
 
@@ -448,6 +516,10 @@ async def remove(interaction: Interaction, member: discord.Member, role: discord
     try:
         await member.remove_roles(role, reason=f"Removed by {interaction.user} via bot")
         await interaction.response.send_message(f"Removed {role.name} from {member.display_name}.", ephemeral=True)
+        try:
+            await bot.refresh_member_panel(member)
+        except Exception:
+            pass
     except discord.Forbidden:
         await interaction.response.send_message("I don't have permission to manage that role.", ephemeral=True)
 

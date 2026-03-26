@@ -92,6 +92,7 @@ Moderator commands
 
 New member workflow
 - When a new member joins, the bot posts a pinned message in the private assignment channel with buttons for each allowed role.
+- Each button shows a checkmark if the member currently has that role (✅) or an empty box if not (☐), and updates live after changes.
 - Moderators/Admins can click buttons to toggle roles on the new member. The action result is acknowledged via ephemeral replies.
 
 Notes and Limitations
