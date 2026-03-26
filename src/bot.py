@@ -39,21 +39,40 @@ class RoleToggleView(discord.ui.View):
         # To avoid duplicates, keep track of which roles we've added
         added_role_ids = set()
         
-        # 1. Add roles from XOR groups in order
+        # 1. Add roles from XOR groups in order, each group in its own row if possible
+        current_row = 0
         for gname in all_group_names:
             rids = xor_groups.get(gname, [])
-            for rid in rids:
-                if rid in allowed_role_map and rid not in added_role_ids:
-                    self._add_role_button(allowed_role_map[rid], member_role_ids, role_parents)
+            # Filter rids that are in allowed_role_map and not already added
+            group_rids = [rid for rid in rids if rid in allowed_role_map and rid not in added_role_ids]
+            
+            # Check if this group has any visible roles (parents met)
+            visible_group_rids = []
+            for rid in group_rids:
+                parent_role_id = role_parents.get(rid)
+                if not parent_role_id or parent_role_id in member_role_ids:
+                    visible_group_rids.append(rid)
+            
+            if visible_group_rids:
+                # Add group roles to the current row (Discord allows 5 items per row)
+                # If a group has more than 5, it will naturally overflow to next row or we can manage it.
+                # However, the requirement is "one row for each xor group".
+                for rid in group_rids:
+                    # We pass the desired row. If there are > 5 roles, we'll need to increment row.
+                    self._add_role_button(allowed_role_map[rid], member_role_ids, role_parents, row=current_row)
                     added_role_ids.add(rid)
+                
+                # Increment row for the next group
+                # Max rows is 5 (0-4). If we exceed 4, we stay at 4 for the rest.
+                current_row = min(current_row + 1, 4)
                     
-        # 2. Add remaining standalone roles
+        # 2. Add remaining standalone roles in the next (or same if we hit the limit) row
         for role in allowed_roles:
             if role.id not in added_role_ids:
-                self._add_role_button(role, member_role_ids, role_parents)
+                self._add_role_button(role, member_role_ids, role_parents, row=current_row)
                 added_role_ids.add(role.id)
 
-    def _add_role_button(self, role: discord.Role, member_role_ids: set[int], role_parents: Dict[int, int]):
+    def _add_role_button(self, role: discord.Role, member_role_ids: set[int], role_parents: Dict[int, int], row: Optional[int] = None):
         if len(self.children) >= 25:
             return
 
@@ -63,17 +82,16 @@ class RoleToggleView(discord.ui.View):
         
         # Check if this role has a parent requirement
         parent_role_id = role_parents.get(role.id)
-        disabled = False
         if parent_role_id and parent_role_id not in member_role_ids:
             # Hide if parent not met (as per existing logic)
             return
         
-        self.add_item(RoleToggleButton(role=role, label=label, style=style, disabled=disabled))
+        self.add_item(RoleToggleButton(role=role, label=label, style=style, row=row))
 
 
 class RoleToggleButton(discord.ui.Button):
-    def __init__(self, role: discord.Role, style: discord.ButtonStyle, label: Optional[str] = None, disabled: bool = False):
-        super().__init__(label=label or role.name, style=style, custom_id=f"toggle_role:{role.id}", disabled=disabled)
+    def __init__(self, role: discord.Role, style: discord.ButtonStyle, label: Optional[str] = None, disabled: bool = False, row: Optional[int] = None):
+        super().__init__(label=label or role.name, style=style, custom_id=f"toggle_role:{role.id}", disabled=disabled, row=row)
         self.role = role
 
     async def callback(self, interaction: Interaction):
