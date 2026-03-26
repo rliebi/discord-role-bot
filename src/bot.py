@@ -77,7 +77,11 @@ class RoleBot(commands.Bot):
         if self.settings.allowed_guilds:
             for gid in self.settings.allowed_guilds:
                 try:
-                    await self.tree.sync(guild=Object(id=gid))
+                    g = Object(id=gid)
+                    # Publish global commands instantly to this guild by copying them
+                    self.tree.clear_commands(guild=g)
+                    self.tree.copy_global_to(guild=g)
+                    await self.tree.sync(guild=g)
                 except Exception as e:
                     logger.warning("Command sync failed for guild %s: %s", gid, e)
         else:
@@ -327,10 +331,13 @@ async def admin_resync(interaction: Interaction):
         pass
     try:
         if bot.settings.allowed_guilds:
-            # sync only to configured guilds
+            # sync only to configured guilds and copy global commands so they appear instantly
             for gid in bot.settings.allowed_guilds:
                 try:
-                    await bot.tree.sync(guild=Object(id=gid))
+                    g = Object(id=gid)
+                    bot.tree.clear_commands(guild=g)
+                    bot.tree.copy_global_to(guild=g)
+                    await bot.tree.sync(guild=g)
                 except Exception as e:
                     logger.warning("Resync failed for guild %s: %s", gid, e)
         else:
