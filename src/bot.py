@@ -128,39 +128,7 @@ class RoleBot(commands.Bot):
     @staticmethod
     def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]]) -> str:
         lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below."]
-        
-        # Add info about parent roles if any
-        if role_parents:
-            parent_info = []
-            for child_id, parent_id in role_parents.items():
-                if child_id in [r.id for r in allowed_roles]:
-                    child_role = member.guild.get_role(child_id)
-                    parent_role = member.guild.get_role(parent_id)
-                    if child_role and parent_role:
-                        parent_info.append(f"- {child_role.name} requires {parent_role.name}")
-            if parent_info:
-                lines.append("")
-                lines.append("**Role Requirements:**")
-                lines.extend(parent_info)
-        
-        # Add info about XOR groups if any
-        if xor_groups:
-            xor_info = []
-            for group_name, rids in xor_groups.items():
-                group_roles = []
-                for rid in rids:
-                    if rid in [r.id for r in allowed_roles]:
-                        r = member.guild.get_role(rid)
-                        if r:
-                            group_roles.append(r.name)
-                if group_roles:
-                    xor_info.append(f"- {group_name}: {', '.join(group_roles)}")
-            
-            if xor_info:
-                lines.append("")
-                lines.append("**XOR Groups (only one role permitted from each):**")
-                lines.extend(xor_info)
-                
+
         return "\n".join(lines)
 
     async def refresh_member_panel(self, member: discord.Member) -> None:
