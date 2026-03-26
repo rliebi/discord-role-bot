@@ -23,31 +23,52 @@ INTENTS.members = True  # required for member join and role management
 
 
 class RoleToggleView(discord.ui.View):
-    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]], timeout: Optional[float] = None):
+    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]], xor_group_order: list[str], timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.member = member
         # Prefix button labels with checkmarks to reflect current assignment state
         member_role_ids = {r.id for r in member.roles}
-        for role in allowed_roles[:25]:  # Discord max buttons per view
-            style = discord.ButtonStyle.success if role.id in member_role_ids else discord.ButtonStyle.secondary
-            checked = "✅ " if role.id in member_role_ids else ""
-            label = f"{checked}{role.name}"
-            
-            # Check if this role has a parent requirement
-            parent_role_id = role_parents.get(role.id)
-            disabled = False
-            if parent_role_id and parent_role_id not in member_role_ids:
-                # If we want to hide it, we can continue; if we want to show it disabled, we set disabled=True
-                # The previous implementation used 'continue' to hide it.
-                continue
-            
-            # Check if this role is in an XOR group
-            for gname, rids in xor_groups.items():
-                if role.id in rids:
-                    label += f" ({gname})"
-                    break
-            
-            self.add_item(RoleToggleButton(role=role, label=label, style=style, disabled=disabled))
+        allowed_role_map = {r.id: r for r in allowed_roles}
+        
+        # Determine order of groups and standalone roles
+        all_group_names = list(xor_group_order)
+        for gname in xor_groups:
+            if gname not in all_group_names:
+                all_group_names.append(gname)
+                
+        # To avoid duplicates, keep track of which roles we've added
+        added_role_ids = set()
+        
+        # 1. Add roles from XOR groups in order
+        for gname in all_group_names:
+            rids = xor_groups.get(gname, [])
+            for rid in rids:
+                if rid in allowed_role_map and rid not in added_role_ids:
+                    self._add_role_button(allowed_role_map[rid], member_role_ids, role_parents)
+                    added_role_ids.add(rid)
+                    
+        # 2. Add remaining standalone roles
+        for role in allowed_roles:
+            if role.id not in added_role_ids:
+                self._add_role_button(role, member_role_ids, role_parents)
+                added_role_ids.add(role.id)
+
+    def _add_role_button(self, role: discord.Role, member_role_ids: set[int], role_parents: Dict[int, int]):
+        if len(self.children) >= 25:
+            return
+
+        style = discord.ButtonStyle.success if role.id in member_role_ids else discord.ButtonStyle.secondary
+        checked = "✅ " if role.id in member_role_ids else ""
+        label = f"{checked}{role.name}"
+        
+        # Check if this role has a parent requirement
+        parent_role_id = role_parents.get(role.id)
+        disabled = False
+        if parent_role_id and parent_role_id not in member_role_ids:
+            # Hide if parent not met (as per existing logic)
+            return
+        
+        self.add_item(RoleToggleButton(role=role, label=label, style=style, disabled=disabled))
 
 
 class RoleToggleButton(discord.ui.Button):
@@ -103,8 +124,8 @@ class RoleToggleButton(discord.ui.Button):
                 bot: RoleBot = interaction.client  # type: ignore
                 cfg = bot.get_guild_cfg(member.guild.id)
                 allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
-                new_content = bot.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
+                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups, xor_group_order=cfg.xor_group_order)
+                new_content = bot.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups, cfg.xor_group_order)
                 if interaction.message:
                     try:
                         await interaction.message.edit(content=new_content, view=new_view, suppress=True)
@@ -126,8 +147,39 @@ class RoleBot(commands.Bot):
 
     # Helpers to render panel content with checkmarks
     @staticmethod
-    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]]) -> str:
+    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]], xor_group_order: list[str]) -> str:
         lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below."]
+
+        member_role_ids = {r.id for r in member.roles}
+        
+        # Add XOR group descriptions
+        # We only show groups that have roles in allowed_roles
+        allowed_role_ids = {r.id for r in allowed_roles}
+        
+        # Use order from xor_group_order, then any other groups
+        all_groups = list(xor_group_order)
+        for gname in xor_groups:
+            if gname not in all_groups:
+                all_groups.append(gname)
+        
+        for gname in all_groups:
+            rids = xor_groups.get(gname, [])
+            # Only show if group contains any allowed roles
+            group_allowed_rids = [rid for rid in rids if rid in allowed_role_ids]
+            if not group_allowed_rids:
+                continue
+            
+            # Check if any role in this group is currently assigned
+            assigned_role = None
+            for rid in group_allowed_rids:
+                if rid in member_role_ids:
+                    role = next((r for r in allowed_roles if r.id == rid), None)
+                    if role:
+                        assigned_role = role.name
+                        break
+            
+            status = f"**{assigned_role}**" if assigned_role else "_None_"
+            lines.append(f"**{gname}**: {status}")
 
         return "\n".join(lines)
 
@@ -145,8 +197,8 @@ class RoleBot(commands.Bot):
                     # check mention and components
                     if member in m.mentions and m.components:
                         allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
-                        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
+                        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups, xor_group_order=cfg.xor_group_order)
+                        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups, cfg.xor_group_order)
                         try:
                             await m.edit(content=content, view=view, suppress=True)
                         except TypeError:
@@ -232,8 +284,8 @@ class RoleBot(commands.Bot):
             content = f"New member joined: {member.mention} (no allowed roles configured yet). Use /roles_allow_add to permit roles."
             await channel.send(content)
             return
-        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
-        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
+        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups, xor_group_order=cfg.xor_group_order)
+        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups, cfg.xor_group_order)
         try:
             msg = await channel.send(content, view=view, silent=True, suppress_embeds=True)
         except TypeError:
@@ -577,9 +629,12 @@ async def roles_xor_add(interaction: Interaction, group_name: str, role: discord
     
     if role.id not in cfg.xor_groups[group_name]:
         cfg.xor_groups[group_name].append(role.id)
+        if group_name not in cfg.xor_group_order:
+            cfg.xor_group_order.append(group_name)
     
     # Cleanup empty groups
     cfg.xor_groups = {gn: rids for gn, rids in cfg.xor_groups.items() if rids}
+    cfg.xor_group_order = [gn for gn in cfg.xor_group_order if gn in cfg.xor_groups]
     
     bot.storage.save_guild(cfg)
     await interaction.response.send_message(f"Role {role.name} added to XOR group '{group_name}'.", ephemeral=True)
@@ -600,6 +655,8 @@ async def roles_xor_remove(interaction: Interaction, role: discord.Role):
             cfg.xor_groups[group_name].remove(role.id)
             if not cfg.xor_groups[group_name]:
                 del cfg.xor_groups[group_name]
+                if group_name in cfg.xor_group_order:
+                    cfg.xor_group_order.remove(group_name)
             removed = True
             break
             
@@ -608,6 +665,62 @@ async def roles_xor_remove(interaction: Interaction, role: discord.Role):
         await interaction.response.send_message(f"Role {role.name} removed from its XOR group.", ephemeral=True)
     else:
         await interaction.response.send_message(f"Role {role.name} was not in any XOR group.", ephemeral=True)
+
+
+@roles_allow_group.command(name="xor_rename", description="Rename an XOR group")
+@app_commands.describe(old_name="The current name of the XOR bundle", new_name="The new name for the XOR bundle")
+async def roles_xor_rename(interaction: Interaction, old_name: str, new_name: str):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage XOR groups.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    
+    if old_name not in cfg.xor_groups:
+        await interaction.response.send_message(f"XOR group '{old_name}' not found.", ephemeral=True)
+        return
+    
+    if new_name in cfg.xor_groups:
+        await interaction.response.send_message(f"XOR group '{new_name}' already exists.", ephemeral=True)
+        return
+
+    # Rename in xor_groups
+    cfg.xor_groups[new_name] = cfg.xor_groups.pop(old_name)
+    
+    # Rename in xor_group_order
+    if old_name in cfg.xor_group_order:
+        idx = cfg.xor_group_order.index(old_name)
+        cfg.xor_group_order[idx] = new_name
+    
+    bot.storage.save_guild(cfg)
+    await interaction.response.send_message(f"XOR group '{old_name}' renamed to '{new_name}'.", ephemeral=True)
+
+
+@roles_allow_group.command(name="xor_order", description="Set the order of XOR groups (comma-separated names)")
+@app_commands.describe(order="Comma-separated list of XOR group names")
+async def roles_xor_order(interaction: Interaction, order: str):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage XOR groups.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    
+    new_order = [name.strip() for name in order.split(",") if name.strip()]
+    
+    # Verify all names exist
+    invalid_names = [name for name in new_order if name not in cfg.xor_groups]
+    if invalid_names:
+        await interaction.response.send_message(f"Invalid XOR group names: {', '.join(invalid_names)}", ephemeral=True)
+        return
+    
+    # Add any missing groups to the end
+    for gname in cfg.xor_groups:
+        if gname not in new_order:
+            new_order.append(gname)
+            
+    cfg.xor_group_order = new_order
+    bot.storage.save_guild(cfg)
+    await interaction.response.send_message(f"XOR group order updated: {', '.join(new_order)}", ephemeral=True)
 
 
 @bot.tree.command(name="assign", description="Assign an allowed role to a member")
