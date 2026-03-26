@@ -39,6 +39,12 @@ class RoleToggleView(discord.ui.View):
         # To avoid duplicates, keep track of which roles we've added
         added_role_ids = set()
         
+        # Map role ID to group name for button labeling
+        role_to_group = {}
+        for gname, rids in xor_groups.items():
+            for rid in rids:
+                role_to_group[rid] = gname
+
         # 1. Add roles from XOR groups in order, each group in its own row if possible
         current_row = 0
         for gname in all_group_names:
@@ -59,7 +65,7 @@ class RoleToggleView(discord.ui.View):
                 # However, the requirement is "one row for each xor group".
                 for rid in group_rids:
                     # We pass the desired row. If there are > 5 roles, we'll need to increment row.
-                    self._add_role_button(allowed_role_map[rid], member_role_ids, role_parents, row=current_row)
+                    self._add_role_button(allowed_role_map[rid], member_role_ids, role_parents, row=current_row, group_name=role_to_group.get(rid))
                     added_role_ids.add(rid)
                 
                 # Increment row for the next group
@@ -72,13 +78,16 @@ class RoleToggleView(discord.ui.View):
                 self._add_role_button(role, member_role_ids, role_parents, row=current_row)
                 added_role_ids.add(role.id)
 
-    def _add_role_button(self, role: discord.Role, member_role_ids: set[int], role_parents: Dict[int, int], row: Optional[int] = None):
+    def _add_role_button(self, role: discord.Role, member_role_ids: set[int], role_parents: Dict[int, int], row: Optional[int] = None, group_name: Optional[str] = None):
         if len(self.children) >= 25:
             return
 
         style = discord.ButtonStyle.success if role.id in member_role_ids else discord.ButtonStyle.secondary
         checked = "✅ " if role.id in member_role_ids else ""
-        label = f"{checked}{role.name}"
+        
+        # Lead with group name if available
+        group_prefix = f"({group_name}) " if group_name else ""
+        label = f"{checked}{group_prefix}{role.name}"
         
         # Check if this role has a parent requirement
         parent_role_id = role_parents.get(role.id)
@@ -166,40 +175,7 @@ class RoleBot(commands.Bot):
     # Helpers to render panel content with checkmarks
     @staticmethod
     def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]], xor_group_order: list[str]) -> str:
-        lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below."]
-
-        member_role_ids = {r.id for r in member.roles}
-        
-        # Add XOR group descriptions
-        # We only show groups that have roles in allowed_roles
-        allowed_role_ids = {r.id for r in allowed_roles}
-        
-        # Use order from xor_group_order, then any other groups
-        all_groups = list(xor_group_order)
-        for gname in xor_groups:
-            if gname not in all_groups:
-                all_groups.append(gname)
-        
-        for gname in all_groups:
-            rids = xor_groups.get(gname, [])
-            # Only show if group contains any allowed roles
-            group_allowed_rids = [rid for rid in rids if rid in allowed_role_ids]
-            if not group_allowed_rids:
-                continue
-            
-            # Check if any role in this group is currently assigned
-            assigned_role = None
-            for rid in group_allowed_rids:
-                if rid in member_role_ids:
-                    role = next((r for r in allowed_roles if r.id == rid), None)
-                    if role:
-                        assigned_role = role.name
-                        break
-            
-            status = f"**{assigned_role}**" if assigned_role else "_None_"
-            lines.append(f"**{gname}**: {status}")
-
-        return "\n".join(lines)
+        return f"New member joined: {member.mention}\n\nToggle roles for this member using the buttons below."
 
     async def refresh_member_panel(self, member: discord.Member) -> None:
         cfg = self.get_guild_cfg(member.guild.id)
