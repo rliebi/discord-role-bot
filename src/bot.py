@@ -9,8 +9,8 @@ import discord
 from discord import app_commands, Interaction, Object
 from discord.ext import commands
 
-from config import Settings
-from storage import Storage, GuildConfig
+from .config import Settings
+from .storage import Storage, GuildConfig
 
 # basic logger; will adjust level after loading settings
 logging.basicConfig(level=logging.INFO)
