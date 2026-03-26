@@ -23,7 +23,7 @@ INTENTS.members = True  # required for member join and role management
 
 
 class RoleToggleView(discord.ui.View):
-    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], timeout: Optional[float] = None):
+    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]], timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.member = member
         # Prefix button labels with checkmarks to reflect current assignment state
@@ -37,7 +37,16 @@ class RoleToggleView(discord.ui.View):
             parent_role_id = role_parents.get(role.id)
             disabled = False
             if parent_role_id and parent_role_id not in member_role_ids:
+                # If we want to hide it, we can continue; if we want to show it disabled, we set disabled=True
+                # The previous implementation used 'continue' to hide it.
                 continue
+            
+            # Check if this role is in an XOR group
+            for gname, rids in xor_groups.items():
+                if role.id in rids:
+                    label += f" ({gname})"
+                    break
+            
             self.add_item(RoleToggleButton(role=role, label=label, style=style, disabled=disabled))
 
 
@@ -65,20 +74,37 @@ class RoleToggleButton(discord.ui.Button):
                 await member.remove_roles(self.role, reason=f"Toggled by {interaction.user} via bot")
                 action = "removed"
             else:
+                cfg = bot.get_guild_cfg(member.guild.id)
+                # Check for XOR group conflicts
+                conflicting_roles = []
+                for group_name, rids in cfg.xor_groups.items():
+                    if self.role.id in rids:
+                        for other_rid in rids:
+                            if other_rid == self.role.id:
+                                continue
+                            other_role = interaction.guild.get_role(other_rid)
+                            if other_role and other_role in member.roles:
+                                conflicting_roles.append(other_role)
+                
+                if conflicting_roles:
+                    await member.remove_roles(*conflicting_roles, reason=f"Removed due to XOR constraint with {self.role.name}")
+                
                 await member.add_roles(self.role, reason=f"Toggled by {interaction.user} via bot")
                 action = "assigned"
+            
             # Ack ephemerally
-            await interaction.response.send_message(
-                f"{action.capitalize()} {self.role.name} {'from' if action=='removed' else 'to'} {member.display_name}.",
-                ephemeral=True,
-            )
+            msg = f"{action.capitalize()} {self.role.name} {'from' if action=='removed' else 'to'} {member.display_name}."
+            if not action == "removed" and 'conflicting_roles' in locals() and conflicting_roles:
+                msg += f" (Removed conflicting: {', '.join(r.name for r in conflicting_roles)})"
+            
+            await interaction.response.send_message(msg, ephemeral=True)
             # Refresh the control panel to reflect new state (checkmarks)
             try:
                 bot: RoleBot = interaction.client  # type: ignore
                 cfg = bot.get_guild_cfg(member.guild.id)
                 allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
-                new_content = bot.build_panel_content(member, allowed_roles, cfg.role_parents)
+                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
+                new_content = bot.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
                 if interaction.message:
                     try:
                         await interaction.message.edit(content=new_content, view=new_view, suppress=True)
@@ -100,7 +126,7 @@ class RoleBot(commands.Bot):
 
     # Helpers to render panel content with checkmarks
     @staticmethod
-    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int]) -> str:
+    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], xor_groups: Dict[str, list[int]]) -> str:
         lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below."]
         
         # Add info about parent roles if any
@@ -116,6 +142,24 @@ class RoleBot(commands.Bot):
                 lines.append("")
                 lines.append("**Role Requirements:**")
                 lines.extend(parent_info)
+        
+        # Add info about XOR groups if any
+        if xor_groups:
+            xor_info = []
+            for group_name, rids in xor_groups.items():
+                group_roles = []
+                for rid in rids:
+                    if rid in [r.id for r in allowed_roles]:
+                        r = member.guild.get_role(rid)
+                        if r:
+                            group_roles.append(r.name)
+                if group_roles:
+                    xor_info.append(f"- {group_name}: {', '.join(group_roles)}")
+            
+            if xor_info:
+                lines.append("")
+                lines.append("**XOR Groups (only one role permitted from each):**")
+                lines.extend(xor_info)
                 
         return "\n".join(lines)
 
@@ -133,8 +177,8 @@ class RoleBot(commands.Bot):
                     # check mention and components
                     if member in m.mentions and m.components:
                         allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
-                        content = self.build_panel_content(member, allowed_roles, cfg.role_parents)
+                        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
+                        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
                         try:
                             await m.edit(content=content, view=view, suppress=True)
                         except TypeError:
@@ -220,8 +264,8 @@ class RoleBot(commands.Bot):
             content = f"New member joined: {member.mention} (no allowed roles configured yet). Use /roles_allow_add to permit roles."
             await channel.send(content)
             return
-        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
-        content = self.build_panel_content(member, allowed_roles, cfg.role_parents)
+        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents, xor_groups=cfg.xor_groups)
+        content = self.build_panel_content(member, allowed_roles, cfg.role_parents, cfg.xor_groups)
         try:
             msg = await channel.send(content, view=view, silent=True, suppress_embeds=True)
         except TypeError:
@@ -498,7 +542,14 @@ async def roles_allow_list(interaction: Interaction):
                 if parent_id:
                     parent_role = interaction.guild.get_role(parent_id)
                     parent_info = f" (requires {parent_role.name if parent_role else parent_id})"
-                roles.append(f"{r.mention}{parent_info}")
+                
+                xor_info = ""
+                for gname, rids in cfg.xor_groups.items():
+                    if rid in rids:
+                        xor_info = f" [XOR: {gname}]"
+                        break
+                
+                roles.append(f"{r.mention}{parent_info}{xor_info}")
     await interaction.response.send_message("Allowed roles:\n" + ("\n".join(roles) if roles else "none"), ephemeral=True)
 
 
@@ -535,6 +586,62 @@ async def roles_remove_parent(interaction: Interaction, role: discord.Role):
         await interaction.response.send_message(f"Role {role.name} had no requirement.", ephemeral=True)
 
 
+@roles_allow_group.command(name="xor_add", description="Add a role to an XOR group (only one role from the group can be assigned)")
+@app_commands.describe(group_name="The name of the XOR bundle", role="The role to add to this bundle")
+async def roles_xor_add(interaction: Interaction, group_name: str, role: discord.Role):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage XOR groups.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    if role.id not in cfg.allowed_role_ids:
+        await interaction.response.send_message(f"Role {role.name} is not in the allowed list. Add it first.", ephemeral=True)
+        return
+    
+    # Ensure role is not in another XOR group (or same group already)
+    # Removing it from any existing group first to simplify
+    for gname, rids in cfg.xor_groups.items():
+        if role.id in rids:
+            rids.remove(role.id)
+    
+    if group_name not in cfg.xor_groups:
+        cfg.xor_groups[group_name] = []
+    
+    if role.id not in cfg.xor_groups[group_name]:
+        cfg.xor_groups[group_name].append(role.id)
+    
+    # Cleanup empty groups
+    cfg.xor_groups = {gn: rids for gn, rids in cfg.xor_groups.items() if rids}
+    
+    bot.storage.save_guild(cfg)
+    await interaction.response.send_message(f"Role {role.name} added to XOR group '{group_name}'.", ephemeral=True)
+
+
+@roles_allow_group.command(name="xor_remove", description="Remove a role from its XOR group")
+@app_commands.describe(role="The role to remove from any XOR bundle")
+async def roles_xor_remove(interaction: Interaction, role: discord.Role):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage XOR groups.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    
+    removed = False
+    for group_name in list(cfg.xor_groups.keys()):
+        if role.id in cfg.xor_groups[group_name]:
+            cfg.xor_groups[group_name].remove(role.id)
+            if not cfg.xor_groups[group_name]:
+                del cfg.xor_groups[group_name]
+            removed = True
+            break
+            
+    if removed:
+        bot.storage.save_guild(cfg)
+        await interaction.response.send_message(f"Role {role.name} removed from its XOR group.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Role {role.name} was not in any XOR group.", ephemeral=True)
+
+
 @bot.tree.command(name="assign", description="Assign an allowed role to a member")
 @app_commands.describe(member="Member to assign", role="Role to assign")
 async def assign(interaction: Interaction, member: discord.Member, role: discord.Role):
@@ -547,8 +654,25 @@ async def assign(interaction: Interaction, member: discord.Member, role: discord
         await interaction.response.send_message("That role is not in the allowed list.", ephemeral=True)
         return
     try:
+        # Check for XOR group conflicts
+        conflicting_roles = []
+        for group_name, rids in cfg.xor_groups.items():
+            if role.id in rids:
+                for other_rid in rids:
+                    if other_rid == role.id:
+                        continue
+                    other_role = interaction.guild.get_role(other_rid)
+                    if other_role and other_role in member.roles:
+                        conflicting_roles.append(other_role)
+        
+        if conflicting_roles:
+            await member.remove_roles(*conflicting_roles, reason=f"Removed due to XOR constraint with {role.name}")
+        
         await member.add_roles(role, reason=f"Assigned by {interaction.user} via bot")
-        await interaction.response.send_message(f"Assigned {role.name} to {member.display_name}.", ephemeral=True)
+        msg = f"Assigned {role.name} to {member.display_name}."
+        if conflicting_roles:
+            msg += f" (Removed conflicting: {', '.join(r.name for r in conflicting_roles)})"
+        await interaction.response.send_message(msg, ephemeral=True)
         try:
             await bot.refresh_member_panel(member)
         except Exception:

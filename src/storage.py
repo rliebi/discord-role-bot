@@ -13,6 +13,7 @@ class GuildConfig:
     allowed_role_ids: list[int] = field(default_factory=list)
     assignment_channel_id: Optional[int] = None
     role_parents: Dict[int, int] = field(default_factory=dict)  # Mapping: child_role_id -> parent_role_id
+    xor_groups: Dict[str, list[int]] = field(default_factory=dict)  # Group name -> list of role IDs
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -27,6 +28,7 @@ class GuildConfig:
             allowed_role_ids=list(data.get("allowed_role_ids", [])),
             assignment_channel_id=data.get("assignment_channel_id"),
             role_parents={int(k): int(v) for k, v in data.get("role_parents", {}).items()},
+            xor_groups={str(k): [int(rid) for rid in v] for k, v in data.get("xor_groups", {}).items()},
         )
 
 
