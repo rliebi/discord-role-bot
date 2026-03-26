@@ -417,6 +417,28 @@ async def remove(interaction: Interaction, member: discord.Member, role: discord
         await interaction.response.send_message("I don't have permission to manage that role.", ephemeral=True)
 
 
+@bot.tree.command(name="simulate_rejoin", description="Simulate a member rejoining to test the control panel posting (mods only)")
+@app_commands.describe(member="Member to simulate as newly joined")
+async def simulate_rejoin(interaction: Interaction, member: discord.Member):
+    await ensure_admin_if_empty(interaction)
+    if not moderator_only(interaction):
+        await interaction.response.send_message("Not permitted.", ephemeral=True)
+        return
+    # Only allow simulating for the current guild and non-bots
+    if not interaction.guild or member.guild.id != interaction.guild.id:
+        await interaction.response.send_message("Target member must be from this server.", ephemeral=True)
+        return
+    if member.bot:
+        await interaction.response.send_message("Cannot simulate rejoin for bot users.", ephemeral=True)
+        return
+    try:
+        await bot.post_assignment_panel(member)
+        await interaction.response.send_message(f"Simulated rejoin for {member.mention}. Panel posted in the assignment channel.", ephemeral=True)
+    except Exception as e:
+        logger.exception("simulate_rejoin failed: %s", e)
+        await interaction.response.send_message(f"Failed to simulate rejoin: {e}", ephemeral=True)
+
+
 if __name__ == "__main__":
     token = bot_settings.token
     bot.run(token)  # type: ignore

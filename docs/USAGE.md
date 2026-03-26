@@ -38,6 +38,8 @@ Moderator actions
   - Assigns an allowed role to a member.
 - /remove member:<Member> role:<Allowed Role>
   - Removes an allowed role from a member.
+- /simulate_rejoin member:<Member>
+  - Simulates that the specified member just joined. Posts the same control panel in the assignment channel so you can test role toggles without the user actually leaving and rejoining. Only available to moderators/admin.
 - Control panel buttons
   - On member join, a pinned message with buttons lets you toggle roles on that specific member.
 

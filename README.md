@@ -88,6 +88,7 @@ Allowed roles management (admin only)
 Moderator commands
 - /assign member:<Member> role:<Allowed Role>
 - /remove member:<Member> role:<Allowed Role>
+- /simulate_rejoin member:<Member>
 
 New member workflow
 - When a new member joins, the bot posts a pinned message in the private assignment channel with buttons for each allowed role.
