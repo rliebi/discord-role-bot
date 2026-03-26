@@ -12,6 +12,7 @@ class GuildConfig:
     moderator_user_ids: list[int] = field(default_factory=list)
     allowed_role_ids: list[int] = field(default_factory=list)
     assignment_channel_id: Optional[int] = None
+    role_parents: Dict[int, int] = field(default_factory=dict)  # Mapping: child_role_id -> parent_role_id
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -25,6 +26,7 @@ class GuildConfig:
             moderator_user_ids=list(data.get("moderator_user_ids", [])),
             allowed_role_ids=list(data.get("allowed_role_ids", [])),
             assignment_channel_id=data.get("assignment_channel_id"),
+            role_parents={int(k): int(v) for k, v in data.get("role_parents", {}).items()},
         )
 
 

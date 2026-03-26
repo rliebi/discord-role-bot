@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import atexit
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import discord
 from discord import app_commands, Interaction, Object
@@ -23,21 +23,27 @@ INTENTS.members = True  # required for member join and role management
 
 
 class RoleToggleView(discord.ui.View):
-    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], timeout: Optional[float] = None):
+    def __init__(self, member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int], timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.member = member
         # Prefix button labels with checkmarks to reflect current assignment state
         member_role_ids = {r.id for r in member.roles}
         for role in allowed_roles[:25]:  # Discord max buttons per view
-            style = discord.ButtonStyle.secondary
-            checked = "✅" if role.id in member_role_ids else "☐"
-            label = f"{checked} {role.name}"
-            self.add_item(RoleToggleButton(role=role, label=label, style=style))
+            style = discord.ButtonStyle.success if role.id in member_role_ids else discord.ButtonStyle.secondary
+            checked = "✅ " if role.id in member_role_ids else ""
+            label = f"{checked}{role.name}"
+            
+            # Check if this role has a parent requirement
+            parent_role_id = role_parents.get(role.id)
+            disabled = False
+            if parent_role_id and parent_role_id not in member_role_ids:
+                continue
+            self.add_item(RoleToggleButton(role=role, label=label, style=style, disabled=disabled))
 
 
 class RoleToggleButton(discord.ui.Button):
-    def __init__(self, role: discord.Role, style: discord.ButtonStyle, label: Optional[str] = None):
-        super().__init__(label=label or role.name, style=style, custom_id=f"toggle_role:{role.id}")
+    def __init__(self, role: discord.Role, style: discord.ButtonStyle, label: Optional[str] = None, disabled: bool = False):
+        super().__init__(label=label or role.name, style=style, custom_id=f"toggle_role:{role.id}", disabled=disabled)
         self.role = role
 
     async def callback(self, interaction: Interaction):
@@ -71,8 +77,8 @@ class RoleToggleButton(discord.ui.Button):
                 bot: RoleBot = interaction.client  # type: ignore
                 cfg = bot.get_guild_cfg(member.guild.id)
                 allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles)
-                new_content = bot.build_panel_content(member, allowed_roles)
+                new_view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
+                new_content = bot.build_panel_content(member, allowed_roles, cfg.role_parents)
                 if interaction.message:
                     try:
                         await interaction.message.edit(content=new_content, view=new_view, suppress=True)
@@ -94,12 +100,23 @@ class RoleBot(commands.Bot):
 
     # Helpers to render panel content with checkmarks
     @staticmethod
-    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role]) -> str:
-        member_role_ids = {r.id for r in member.roles}
-        lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below.", "", "Current allowed roles:"]
-        for r in allowed_roles:
-            checked = "✅" if r.id in member_role_ids else "☐"
-            lines.append(f"- {checked} {r.name}")
+    def build_panel_content(member: discord.Member, allowed_roles: List[discord.Role], role_parents: Dict[int, int]) -> str:
+        lines = [f"New member joined: {member.mention}", "", "Toggle roles for this member using the buttons below."]
+        
+        # Add info about parent roles if any
+        if role_parents:
+            parent_info = []
+            for child_id, parent_id in role_parents.items():
+                if child_id in [r.id for r in allowed_roles]:
+                    child_role = member.guild.get_role(child_id)
+                    parent_role = member.guild.get_role(parent_id)
+                    if child_role and parent_role:
+                        parent_info.append(f"- {child_role.name} requires {parent_role.name}")
+            if parent_info:
+                lines.append("")
+                lines.append("**Role Requirements:**")
+                lines.extend(parent_info)
+                
         return "\n".join(lines)
 
     async def refresh_member_panel(self, member: discord.Member) -> None:
@@ -116,8 +133,8 @@ class RoleBot(commands.Bot):
                     # check mention and components
                     if member in m.mentions and m.components:
                         allowed_roles = [r for r in member.guild.roles if r.id in set(cfg.allowed_role_ids)]
-                        view = RoleToggleView(member=member, allowed_roles=allowed_roles)
-                        content = self.build_panel_content(member, allowed_roles)
+                        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
+                        content = self.build_panel_content(member, allowed_roles, cfg.role_parents)
                         try:
                             await m.edit(content=content, view=view, suppress=True)
                         except TypeError:
@@ -203,8 +220,8 @@ class RoleBot(commands.Bot):
             content = f"New member joined: {member.mention} (no allowed roles configured yet). Use /roles_allow_add to permit roles."
             await channel.send(content)
             return
-        view = RoleToggleView(member=member, allowed_roles=allowed_roles)
-        content = self.build_panel_content(member, allowed_roles)
+        view = RoleToggleView(member=member, allowed_roles=allowed_roles, role_parents=cfg.role_parents)
+        content = self.build_panel_content(member, allowed_roles, cfg.role_parents)
         try:
             msg = await channel.send(content, view=view, silent=True, suppress_embeds=True)
         except TypeError:
@@ -476,8 +493,46 @@ async def roles_allow_list(interaction: Interaction):
         for rid in cfg.allowed_role_ids:
             r = interaction.guild.get_role(rid)
             if r:
-                roles.append(r.mention)
-    await interaction.response.send_message("Allowed roles: " + (", ".join(roles) if roles else "none"), ephemeral=True)
+                parent_info = ""
+                parent_id = cfg.role_parents.get(rid)
+                if parent_id:
+                    parent_role = interaction.guild.get_role(parent_id)
+                    parent_info = f" (requires {parent_role.name if parent_role else parent_id})"
+                roles.append(f"{r.mention}{parent_info}")
+    await interaction.response.send_message("Allowed roles:\n" + ("\n".join(roles) if roles else "none"), ephemeral=True)
+
+
+@roles_allow_group.command(name="set_parent", description="Set a parent role requirement for an allowed role")
+@app_commands.describe(role="The role that will require a parent", parent="The required parent role")
+async def roles_set_parent(interaction: Interaction, role: discord.Role, parent: discord.Role):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage role requirements.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    if role.id not in cfg.allowed_role_ids:
+        await interaction.response.send_message(f"Role {role.name} is not in the allowed list. Add it first.", ephemeral=True)
+        return
+    
+    cfg.role_parents[role.id] = parent.id
+    bot.storage.save_guild(cfg)
+    await interaction.response.send_message(f"Role {role.name} now requires {parent.name}.", ephemeral=True)
+
+
+@roles_allow_group.command(name="remove_parent", description="Remove the parent role requirement from a role")
+@app_commands.describe(role="The role to remove the requirement from")
+async def roles_remove_parent(interaction: Interaction, role: discord.Role):
+    await ensure_admin_if_empty(interaction)
+    if not admin_only(interaction):
+        await interaction.response.send_message("Only the admin can manage role requirements.", ephemeral=True)
+        return
+    cfg = bot.get_guild_cfg(interaction.guild.id)  # type: ignore
+    if role.id in cfg.role_parents:
+        del cfg.role_parents[role.id]
+        bot.storage.save_guild(cfg)
+        await interaction.response.send_message(f"Requirement removed from {role.name}.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Role {role.name} had no requirement.", ephemeral=True)
 
 
 @bot.tree.command(name="assign", description="Assign an allowed role to a member")
